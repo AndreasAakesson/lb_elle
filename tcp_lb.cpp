@@ -71,12 +71,70 @@ private:
 
 struct Connection {
   using Socket = elle::reactor::network::TCPSocket;
+  using Socket_ptr = std::unique_ptr<Socket>;
+  using Thread = elle::reactor::Thread;
+  using Thread_ptr = std::unique_ptr<Thread>;
+  using Collection = std::map<Socket::EndPoint, std::unique_ptr<Connection>>;
 
-  std::unique_ptr<Socket> outside;
-  std::unique_ptr<Socket> inside;
+  Collection& collection;
+  Socket_ptr outside;
+  Socket_ptr inside;
 
-  ~Connection() {
-    std::cout << "~Connection" << std::endl;
+  Thread_ptr out_to_in;
+  Thread_ptr in_to_out;
+
+  Connection(Collection& col, Socket_ptr out, Socket_ptr in)
+    : collection{col},
+      outside{std::move(out)},
+      inside{std::move(in)}
+  {
+    out_to_in = std::make_unique<Thread>(
+      elle::sprintf("conn %s", outside),
+      [this] {
+        try
+        {
+          while (true)
+          {
+            auto payload = outside->read_some(4096);
+            inside->write(payload);
+          }
+        }
+        catch (elle::reactor::network::ConnectionClosed const&)
+        {
+          std::cout << "Connection closed in client_out" << std::endl;
+          throw;
+        }
+        //this->close();
+      });
+
+    in_to_out = std::make_unique<Thread>(
+      elle::sprintf("conn %s", inside),
+      [this] {
+        try
+        {
+          while (true)
+          {
+            auto payload = inside->read_some(4096);
+            outside->write(payload);
+          }
+        }
+        catch (elle::reactor::network::ConnectionClosed const&)
+        {
+          std::cout << "Connection closed in client_in" << std::endl;
+          throw;
+        }
+        //this->close();
+      });
+  }
+
+  auto id() const
+  {
+    return outside->peer();
+  }
+
+  void close()
+  {
+    collection[id()] = nullptr;
   }
 };
 
@@ -95,7 +153,10 @@ main(int argc, char* argv[])
     // Properly terminate the scheduler in case of SIGINT.
     sched.signal_handle(SIGINT, [&sched] { sched.terminate(); });
 
-    Nodes nodes{{"localhost", "8090"}, {"localhost", "8091"}};
+    Nodes nodes{
+      {"localhost", "8090"},
+      {"localhost", "8091"}
+    };
 
     // Create a coroutine (named elle::reactor::Thread).
     elle::reactor::Thread acceptor(sched, "acceptor", [&]
@@ -107,55 +168,18 @@ main(int argc, char* argv[])
         // destruction, elle::With handles nested exceptions.
         elle::With<elle::reactor::Scope>() << [&] (elle::reactor::Scope& scope)
         {
+          Connection::Collection connections;
           while (true)
           {
             try
             {
-              auto conn = std::make_shared<Connection>();
               // Server::accept yields until it gets a connection.
-              conn->outside = elle::utility::move_on_copy(server.accept());
+              auto outside = elle::utility::move_on_copy(server.accept());
               // Connect to one of our nodes
-              conn->inside = nodes.next().connect();
+              auto inside = nodes.next().connect();
 
-              // Write Outside -> Inside
-              scope.run_background(
-                elle::sprintf("client_out %s", conn),
-                [conn]
-                {
-                  try
-                  {
-                    while (true)
-                    {
-                      auto payload = conn->outside->read(4096);
-                      //conn->inside->write(payload);
-                    }
-                  }
-                  catch (elle::reactor::network::ConnectionClosed const&)
-                  {
-                    std::cout << "Connection closed in client_out" << std::endl;
-                    throw;
-                  }
-                }); // < scope out -> in
-
-              // Write Inside -> Outside
-              scope.run_background(
-                elle::sprintf("client_in %s", conn),
-                [conn]
-                {
-                  try
-                  {
-                    while (true)
-                    {
-                      auto payload = conn->inside->read(4096);
-                      conn->outside->write(payload);
-                    }
-                  }
-                  catch (elle::reactor::network::ConnectionClosed const&)
-                  {
-                    std::cout << "Connection closed in client_in" << std::endl;
-                    throw;
-                  }
-                }); // < scope in -> out
+              auto conn = std::make_unique<Connection>(connections, std::move(outside), std::move(inside));
+              connections.emplace(conn->id(), std::move(conn));
             }
             catch (elle::reactor::network::ConnectionClosed const&)
             {
