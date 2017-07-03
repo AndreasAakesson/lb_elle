@@ -15,7 +15,7 @@ var stringToColour = function(str) {
 
 //We need a function which handles requests and send response
 function handleRequest(request, response){
-  response.setTimeout(500);
+  response.setTimeout(5000);
   var addr = request.connection.localPort;
   var bgcolor = stringToColour(addr + "42");
   var body = '<h1>'+ addr +'</h1><br/>' + 'Link established with server <strong>' + addr + '</strong>';
@@ -25,3 +25,4 @@ function handleRequest(request, response){
 
 http.createServer(handleRequest).listen(8090);
 http.createServer(handleRequest).listen(8091);
+http.createServer(handleRequest).listen(8092);

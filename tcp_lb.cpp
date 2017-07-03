@@ -83,17 +83,20 @@ struct Connection {
   Thread_ptr out_to_in;
   Thread_ptr in_to_out;
 
+  const Socket::EndPoint id_;
+
   Connection(Collection& col, Socket_ptr out, Socket_ptr in)
     : collection{col},
       outside{std::move(out)},
-      inside{std::move(in)}
+      inside{std::move(in)},
+      id_{outside->peer()}
   {
     out_to_in = std::make_unique<Thread>(
       elle::sprintf("conn %s", outside),
       [this] {
         try
         {
-          while (true)
+          while (outside and inside)
           {
             auto payload = outside->read_some(4096);
             inside->write(payload);
@@ -101,10 +104,14 @@ struct Connection {
         }
         catch (elle::reactor::network::ConnectionClosed const&)
         {
-          std::cout << "Connection closed in client_out" << std::endl;
-          throw;
+          std::cout << "Connection closed in out_to_in" << std::endl;
         }
-        //this->close();
+        out_to_in.release()->dispose(true);
+
+        outside.release();
+
+        if(inside) inside->close();
+        else this->close();
       });
 
     in_to_out = std::make_unique<Thread>(
@@ -112,7 +119,7 @@ struct Connection {
       [this] {
         try
         {
-          while (true)
+          while (inside and outside)
           {
             auto payload = inside->read_some(4096);
             outside->write(payload);
@@ -120,21 +127,30 @@ struct Connection {
         }
         catch (elle::reactor::network::ConnectionClosed const&)
         {
-          std::cout << "Connection closed in client_in" << std::endl;
-          throw;
+          std::cout << "Connection closed in in_to_out" << std::endl;
         }
-        //this->close();
+        in_to_out.release()->dispose(true);
+
+        inside.release();
+
+        if(outside) outside->close();
+        else this->close();
       });
   }
 
   auto id() const
   {
-    return outside->peer();
+    return id_;
   }
 
   void close()
   {
-    collection[id()] = nullptr;
+    collection[id()] = nullptr; // o_O
+  }
+
+  ~Connection()
+  {
+    std::cout << "~Connection" << std::endl;
   }
 };
 
@@ -155,7 +171,8 @@ main(int argc, char* argv[])
 
     Nodes nodes{
       {"localhost", "8090"},
-      {"localhost", "8091"}
+      {"localhost", "8091"},
+      {"localhost", "8092"}
     };
 
     // Create a coroutine (named elle::reactor::Thread).
