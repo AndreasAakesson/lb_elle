@@ -7,13 +7,17 @@
   How to test (using netcat):
   $ nc 127.0.0.1 8080
 */
+
 #include <elle/With.hh>
 #include <elle/Exception.hh>
+#include <elle/log.hh>
 
 #include <elle/reactor/network/Error.hh>
 #include <elle/reactor/network/TCPSocket.hh>
 #include <elle/reactor/network/TCPServer.hh>
 #include <elle/reactor/scheduler.hh>
+
+ELLE_LOG_COMPONENT("LB");
 
 struct Node {
   std::string host;
@@ -109,9 +113,7 @@ struct Connection
           }
         }
         catch (elle::reactor::network::ConnectionClosed const&)
-        {
-          std::cout << "Connection closed" << std::endl;
-        }
+        {}
         from.close();
         to.close();
         collection.erase(id_);
@@ -131,7 +133,7 @@ struct Connection
 
   ~Connection()
   {
-    std::cout << "~Connection" << std::endl;
+    ELLE_LOG("lost connection from {}", this->outside->peer());
   }
 };
 
@@ -173,6 +175,8 @@ main(int argc, char* argv[])
             auto inside = nodes.next().connect();
             auto conn = std::make_shared<Connection>(connections, std::move(outside), std::move(inside));
             connections.emplace(conn->id(), std::move(conn));
+            ELLE_LOG("new connection from {}, forward to {}",
+                     outside->peer(), inside->peer());
           }
           catch (elle::reactor::network::ConnectionClosed const&)
           {
