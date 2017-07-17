@@ -159,22 +159,15 @@ main(int argc, char* argv[])
         Connection::Collection connections;
         while (true)
         {
-          try
-          {
-            // Server::accept yields until it gets a connection.
-            auto outside = server.accept();
-            // Connect to one of our nodes
-            auto inside = nodes.next().connect();
-            ELLE_LOG("new connection from {}, forward to {}",
-                     outside->peer(), inside->peer());
-            connections.emplace(
-              std::make_shared<Connection>(
-                connections, std::move(outside), std::move(inside)));
-          }
-          catch (elle::reactor::network::ConnectionClosed const&)
-          {
-            std::cout << "Connection closed" << std::endl;
-          }
+          // Server::accept yields until it gets a connection.
+          auto outside = server.accept();
+          // Connect to one of our nodes
+          auto inside = nodes.next().connect();
+          ELLE_LOG("new connection from {}, forward to {}",
+                   outside->peer(), inside->peer());
+          connections.emplace(
+            std::make_shared<Connection>(
+              connections, std::move(outside), std::move(inside)));
         } // < while(true)
       }); // < thread acceptor
     // Run the Scheduler until all coroutines are over or it gets interrupted
