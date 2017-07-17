@@ -67,12 +67,14 @@ private:
   Iter iter;
 };
 
-struct Connection {
+struct Connection
+  : std::enable_shared_from_this<Connection>
+{
   using Socket = elle::reactor::network::TCPSocket;
-  using Socket_ptr = std::unique_ptr<Socket>;
+  using Socket_ptr = std::shared_ptr<Socket>;
   using Thread = elle::reactor::Thread;
   using Thread_ptr = std::unique_ptr<Thread>;
-  using Collection = std::map<Socket::EndPoint, std::unique_ptr<Connection>>;
+  using Collection = std::map<Socket::EndPoint, std::shared_ptr<Connection>>;
 
   Collection& collection;
   Socket_ptr outside;
@@ -91,10 +93,12 @@ struct Connection {
   {
     out_to_in = std::make_unique<Thread>(
       elle::sprintf("conn %s", outside),
-      [this] {
+      [this, self = std::shared_ptr<Connection>()] () mutable
+      {
+        self = this->shared_from_this();
         try
         {
-          while (outside and inside)
+          while (true)
           {
             auto payload = outside->read_some(4096);
             inside->write(payload);
@@ -104,20 +108,18 @@ struct Connection {
         {
           std::cout << "Connection closed in out_to_in" << std::endl;
         }
-        out_to_in.release()->dispose(true);
-
-        outside.release();
-
-        if(inside) inside->close();
-        else this->close();
+        outside->close();
+        inside->close();
+        collection.erase(id_);
       });
-
     in_to_out = std::make_unique<Thread>(
       elle::sprintf("conn %s", inside),
-      [this] {
+      [this, self = std::shared_ptr<Connection>()] () mutable
+      {
+        self = this->shared_from_this();
         try
         {
-          while (inside and outside)
+          while (true)
           {
             auto payload = inside->read_some(4096);
             outside->write(payload);
@@ -127,23 +129,15 @@ struct Connection {
         {
           std::cout << "Connection closed in in_to_out" << std::endl;
         }
-        in_to_out.release()->dispose(true);
-
-        inside.release();
-
-        if(outside) outside->close();
-        else this->close();
+        inside->close();
+        outside->close();
+        collection.erase(id_);
       });
   }
 
   auto id() const
   {
     return id_;
-  }
-
-  void close()
-  {
-    collection[id()] = nullptr; // o_O
   }
 
   ~Connection()
@@ -188,7 +182,7 @@ main(int argc, char* argv[])
             auto outside = server.accept();
             // Connect to one of our nodes
             auto inside = nodes.next().connect();
-            auto conn = std::make_unique<Connection>(connections, std::move(outside), std::move(inside));
+            auto conn = std::make_shared<Connection>(connections, std::move(outside), std::move(inside));
             connections.emplace(conn->id(), std::move(conn));
           }
           catch (elle::reactor::network::ConnectionClosed const&)
