@@ -78,7 +78,7 @@ struct Connection
   using Socket_ptr = std::shared_ptr<Socket>;
   using Thread = elle::reactor::Thread;
   using Thread_ptr = std::unique_ptr<Thread>;
-  using Collection = std::map<Socket::EndPoint, std::shared_ptr<Connection>>;
+  using Collection = std::unordered_set<std::shared_ptr<Connection>>;
 
   Collection& collection;
   Socket_ptr outside;
@@ -87,13 +87,10 @@ struct Connection
   Thread_ptr out_to_in;
   Thread_ptr in_to_out;
 
-  const Socket::EndPoint id_;
-
   Connection(Collection& col, Socket_ptr out, Socket_ptr in)
     : collection{col},
       outside{std::move(out)},
-      inside{std::move(in)},
-      id_{outside->peer()}
+      inside{std::move(in)}
   {
     // Classical trick: forward holds a reference to the Connection to maintain
     // it alive while we are not done. The scheduler reset thread actions once
@@ -116,7 +113,7 @@ struct Connection
         {}
         from.close();
         to.close();
-        collection.erase(id_);
+        collection.erase(self);
       };
     out_to_in = std::make_unique<Thread>(
       elle::print("{}: out -> in", outside),
@@ -124,11 +121,6 @@ struct Connection
     in_to_out = std::make_unique<Thread>(
       elle::print("{}: in -> out", outside),
       [this, forward] () mutable { forward(*inside, *outside); });
-  }
-
-  auto id() const
-  {
-    return id_;
   }
 
   ~Connection()
@@ -173,10 +165,11 @@ main(int argc, char* argv[])
             auto outside = server.accept();
             // Connect to one of our nodes
             auto inside = nodes.next().connect();
-            auto conn = std::make_shared<Connection>(connections, std::move(outside), std::move(inside));
-            connections.emplace(conn->id(), std::move(conn));
             ELLE_LOG("new connection from {}, forward to {}",
                      outside->peer(), inside->peer());
+            connections.emplace(
+              std::make_shared<Connection>(
+                connections, std::move(outside), std::move(inside)));
           }
           catch (elle::reactor::network::ConnectionClosed const&)
           {
