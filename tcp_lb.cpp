@@ -91,6 +91,10 @@ struct Connection
       inside{std::move(in)},
       id_{outside->peer()}
   {
+    // Classical trick: forward holds a reference to the Connection to maintain
+    // it alive while we are not done. The scheduler reset thread actions once
+    // they are done, thus losing those reference and deleting properly the
+    // threads once they are both done.
     auto forward =
       [this, self = std::shared_ptr<Connection>()]
       (Socket& from, Socket& to) mutable
