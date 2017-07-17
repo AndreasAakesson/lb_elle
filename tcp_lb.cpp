@@ -8,7 +8,6 @@
   $ nc 127.0.0.1 8080
 */
 #include <elle/With.hh>
-#include <elle/utility/Move.hh>
 #include <elle/Exception.hh>
 
 #include <elle/reactor/network/Error.hh>
@@ -186,10 +185,9 @@ main(int argc, char* argv[])
           try
           {
             // Server::accept yields until it gets a connection.
-            auto outside = elle::utility::move_on_copy(server.accept());
+            auto outside = server.accept();
             // Connect to one of our nodes
             auto inside = nodes.next().connect();
-
             auto conn = std::make_unique<Connection>(connections, std::move(outside), std::move(inside));
             connections.emplace(conn->id(), std::move(conn));
           }
