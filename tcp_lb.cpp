@@ -11,7 +11,6 @@
 #include <elle/utility/Move.hh>
 #include <elle/Exception.hh>
 
-#include <elle/reactor/Scope.hh>
 #include <elle/reactor/network/Error.hh>
 #include <elle/reactor/network/TCPSocket.hh>
 #include <elle/reactor/network/TCPServer.hh>
@@ -181,30 +180,24 @@ main(int argc, char* argv[])
         elle::reactor::network::TCPServer server;
         auto port = std::atoi(argv[1]);
         server.listen(port);
-        // Scope enable to start tasks and make sure they are terminated upon
-        // destruction, elle::With handles nested exceptions.
-        elle::With<elle::reactor::Scope>() << [&] (elle::reactor::Scope& scope)
+        Connection::Collection connections;
+        while (true)
         {
-          Connection::Collection connections;
-          while (true)
+          try
           {
-            try
-            {
-              // Server::accept yields until it gets a connection.
-              auto outside = elle::utility::move_on_copy(server.accept());
-              // Connect to one of our nodes
-              auto inside = nodes.next().connect();
+            // Server::accept yields until it gets a connection.
+            auto outside = elle::utility::move_on_copy(server.accept());
+            // Connect to one of our nodes
+            auto inside = nodes.next().connect();
 
-              auto conn = std::make_unique<Connection>(connections, std::move(outside), std::move(inside));
-              connections.emplace(conn->id(), std::move(conn));
-            }
-            catch (elle::reactor::network::ConnectionClosed const&)
-            {
-              std::cout << "Connection closed" << std::endl;
-            }
-          } // < while(true)
-          scope.wait();
-        }; // < scope
+            auto conn = std::make_unique<Connection>(connections, std::move(outside), std::move(inside));
+            connections.emplace(conn->id(), std::move(conn));
+          }
+          catch (elle::reactor::network::ConnectionClosed const&)
+          {
+            std::cout << "Connection closed" << std::endl;
+          }
+        } // < while(true)
       }); // < thread acceptor
     // Run the Scheduler until all coroutines are over or it gets interrupted
     // (by a signal or programmatically).
