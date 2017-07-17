@@ -1,14 +1,3 @@
-/*
-  Create a TCP echo server, which echo you back what you sent.
-
-  How to run:
-  $ ./reactor/examples/echo_server 8080
-
-  How to test (using netcat):
-  $ nc 127.0.0.1 8080
-*/
-
-#include <elle/With.hh>
 #include <elle/Exception.hh>
 #include <elle/log.hh>
 
