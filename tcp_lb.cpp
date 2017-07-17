@@ -91,48 +91,33 @@ struct Connection
       inside{std::move(in)},
       id_{outside->peer()}
   {
+    auto forward =
+      [this, self = std::shared_ptr<Connection>()]
+      (Socket& from, Socket& to) mutable
+      {
+        self = this->shared_from_this();
+        try
+        {
+          while (true)
+          {
+            auto payload = from.read_some(4096);
+            to.write(payload);
+          }
+        }
+        catch (elle::reactor::network::ConnectionClosed const&)
+        {
+          std::cout << "Connection closed" << std::endl;
+        }
+        from.close();
+        to.close();
+        collection.erase(id_);
+      };
     out_to_in = std::make_unique<Thread>(
-      elle::sprintf("conn %s", outside),
-      [this, self = std::shared_ptr<Connection>()] () mutable
-      {
-        self = this->shared_from_this();
-        try
-        {
-          while (true)
-          {
-            auto payload = outside->read_some(4096);
-            inside->write(payload);
-          }
-        }
-        catch (elle::reactor::network::ConnectionClosed const&)
-        {
-          std::cout << "Connection closed in out_to_in" << std::endl;
-        }
-        outside->close();
-        inside->close();
-        collection.erase(id_);
-      });
+      elle::print("{}: out -> in", outside),
+      [this, forward] () mutable { forward(*outside, *inside); });
     in_to_out = std::make_unique<Thread>(
-      elle::sprintf("conn %s", inside),
-      [this, self = std::shared_ptr<Connection>()] () mutable
-      {
-        self = this->shared_from_this();
-        try
-        {
-          while (true)
-          {
-            auto payload = inside->read_some(4096);
-            outside->write(payload);
-          }
-        }
-        catch (elle::reactor::network::ConnectionClosed const&)
-        {
-          std::cout << "Connection closed in in_to_out" << std::endl;
-        }
-        inside->close();
-        outside->close();
-        collection.erase(id_);
-      });
+      elle::print("{}: in -> out", outside),
+      [this, forward] () mutable { forward(*inside, *outside); });
   }
 
   auto id() const
