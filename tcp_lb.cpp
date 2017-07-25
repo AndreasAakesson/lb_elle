@@ -1,21 +1,12 @@
-/*
-  Create a TCP echo server, which echo you back what you sent.
-
-  How to run:
-  $ ./reactor/examples/echo_server 8080
-
-  How to test (using netcat):
-  $ nc 127.0.0.1 8080
-*/
-#include <elle/With.hh>
-#include <elle/utility/Move.hh>
 #include <elle/Exception.hh>
+#include <elle/log.hh>
 
-#include <elle/reactor/Scope.hh>
 #include <elle/reactor/network/Error.hh>
 #include <elle/reactor/network/TCPSocket.hh>
 #include <elle/reactor/network/TCPServer.hh>
 #include <elle/reactor/scheduler.hh>
+
+ELLE_LOG_COMPONENT("LB");
 
 struct Node {
   std::string host;
@@ -69,12 +60,14 @@ private:
   Iter iter;
 };
 
-struct Connection {
+struct Connection
+  : std::enable_shared_from_this<Connection>
+{
   using Socket = elle::reactor::network::TCPSocket;
-  using Socket_ptr = std::unique_ptr<Socket>;
+  using Socket_ptr = std::shared_ptr<Socket>;
   using Thread = elle::reactor::Thread;
   using Thread_ptr = std::unique_ptr<Thread>;
-  using Collection = std::map<Socket::EndPoint, std::unique_ptr<Connection>>;
+  using Collection = std::unordered_set<std::shared_ptr<Connection>>;
 
   Collection& collection;
   Socket_ptr outside;
@@ -83,74 +76,45 @@ struct Connection {
   Thread_ptr out_to_in;
   Thread_ptr in_to_out;
 
-  const Socket::EndPoint id_;
-
   Connection(Collection& col, Socket_ptr out, Socket_ptr in)
     : collection{col},
       outside{std::move(out)},
-      inside{std::move(in)},
-      id_{outside->peer()}
+      inside{std::move(in)}
   {
+    // Classical trick: forward holds a reference to the Connection to maintain
+    // it alive while we are not done. The scheduler reset thread actions once
+    // they are done, thus losing those reference and deleting properly the
+    // threads once they are both done.
+    auto forward =
+      [this, self = std::shared_ptr<Connection>()]
+      (Socket& from, Socket& to) mutable
+      {
+        self = this->shared_from_this();
+        try
+        {
+          while (true)
+          {
+            auto payload = from.read_some(4096);
+            to.write(payload);
+          }
+        }
+        catch (elle::reactor::network::ConnectionClosed const&)
+        {}
+        from.close();
+        to.close();
+        collection.erase(self);
+      };
     out_to_in = std::make_unique<Thread>(
-      elle::sprintf("conn %s", outside),
-      [this] {
-        try
-        {
-          while (outside and inside)
-          {
-            auto payload = outside->read_some(4096);
-            inside->write(payload);
-          }
-        }
-        catch (elle::reactor::network::ConnectionClosed const&)
-        {
-          std::cout << "Connection closed in out_to_in" << std::endl;
-        }
-        out_to_in.release()->dispose(true);
-
-        outside.release();
-
-        if(inside) inside->close();
-        else this->close();
-      });
-
+      elle::print("{}: out -> in", outside),
+      [this, forward] () mutable { forward(*outside, *inside); });
     in_to_out = std::make_unique<Thread>(
-      elle::sprintf("conn %s", inside),
-      [this] {
-        try
-        {
-          while (inside and outside)
-          {
-            auto payload = inside->read_some(4096);
-            outside->write(payload);
-          }
-        }
-        catch (elle::reactor::network::ConnectionClosed const&)
-        {
-          std::cout << "Connection closed in in_to_out" << std::endl;
-        }
-        in_to_out.release()->dispose(true);
-
-        inside.release();
-
-        if(outside) outside->close();
-        else this->close();
-      });
-  }
-
-  auto id() const
-  {
-    return id_;
-  }
-
-  void close()
-  {
-    collection[id()] = nullptr; // o_O
+      elle::print("{}: in -> out", outside),
+      [this, forward] () mutable { forward(*inside, *outside); });
   }
 
   ~Connection()
   {
-    std::cout << "~Connection" << std::endl;
+    ELLE_LOG("lost connection from {}", this->outside->peer());
   }
 };
 
@@ -181,30 +145,19 @@ main(int argc, char* argv[])
         elle::reactor::network::TCPServer server;
         auto port = std::atoi(argv[1]);
         server.listen(port);
-        // Scope enable to start tasks and make sure they are terminated upon
-        // destruction, elle::With handles nested exceptions.
-        elle::With<elle::reactor::Scope>() << [&] (elle::reactor::Scope& scope)
+        Connection::Collection connections;
+        while (true)
         {
-          Connection::Collection connections;
-          while (true)
-          {
-            try
-            {
-              // Server::accept yields until it gets a connection.
-              auto outside = elle::utility::move_on_copy(server.accept());
-              // Connect to one of our nodes
-              auto inside = nodes.next().connect();
-
-              auto conn = std::make_unique<Connection>(connections, std::move(outside), std::move(inside));
-              connections.emplace(conn->id(), std::move(conn));
-            }
-            catch (elle::reactor::network::ConnectionClosed const&)
-            {
-              std::cout << "Connection closed" << std::endl;
-            }
-          } // < while(true)
-          scope.wait();
-        }; // < scope
+          // Server::accept yields until it gets a connection.
+          auto outside = server.accept();
+          // Connect to one of our nodes
+          auto inside = nodes.next().connect();
+          ELLE_LOG("new connection from {}, forward to {}",
+                   outside->peer(), inside->peer());
+          connections.emplace(
+            std::make_shared<Connection>(
+              connections, std::move(outside), std::move(inside)));
+        } // < while(true)
       }); // < thread acceptor
     // Run the Scheduler until all coroutines are over or it gets interrupted
     // (by a signal or programmatically).
